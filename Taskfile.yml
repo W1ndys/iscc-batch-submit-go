@@ -1,0 +1,43 @@
+version: "3"
+
+vars:
+  APP: iscc-batch-submit-go
+  BIN: bin/iscc-batch-submit-go
+
+tasks:
+  default:
+    desc: 查看可用任务
+    cmds:
+      - task --list
+
+  fmt:
+    desc: 格式化 Go 源码
+    cmds:
+      - gofmt -w cmd internal
+
+  tidy:
+    desc: 同步 Go 模块依赖
+    cmds:
+      - GOCACHE=$PWD/.gocache go mod tidy
+
+  test:
+    desc: 运行全部测试
+    cmds:
+      - GOCACHE=$PWD/.gocache go test ./...
+
+  build:
+    desc: 构建 CLI 二进制文件
+    deps: [fmt]
+    cmds:
+      - mkdir -p bin
+      - GOCACHE=$PWD/.gocache go build -o {{.BIN}} ./cmd/{{.APP}}
+
+  run:
+    desc: 通过 go run 执行 CLI，参数放在 -- 后面
+    cmds:
+      - GOCACHE=$PWD/.gocache go run ./cmd/{{.APP}} {{.CLI_ARGS}}
+
+  clean:
+    desc: 清理构建产物和本地 Go 缓存
+    cmds:
+      - rm -rf bin .gocache
