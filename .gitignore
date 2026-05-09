@@ -30,3 +30,16 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Project build outputs
+bin/
+dist/
+build/
+
+# Local Go caches
+.gocache/
+
+# Runtime files
+.iscc_cookies.json
+flags.txt
+*.log
