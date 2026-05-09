@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 运行测试
+        run: go test ./...
+
+      - name: 构建发布产物
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app="iscc-batch-submit-go"
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+
+          targets=(
+            "linux amd64"
+            "linux arm64"
+            "darwin amd64"
+            "darwin arm64"
+            "windows amd64"
+            "windows arm64"
+          )
+
+          for target in "${targets[@]}"; do
+            read -r goos goarch <<< "${target}"
+            name="${app}_${version}_${goos}_${goarch}"
+            output="dist/${name}"
+            if [[ "${goos}" == "windows" ]]; then
+              output="${output}.exe"
+            fi
+
+            GOOS="${goos}" GOARCH="${goarch}" CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" -o "${output}" ./cmd/${app}
+
+            if [[ "${goos}" == "windows" ]]; then
+              (cd dist && zip "${name}.zip" "${name}.exe")
+              rm "${output}"
+            else
+              tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+              rm "${output}"
+            fi
+          done
+
+          (cd dist && sha256sum * > checksums.txt)
+
+      - name: 创建 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --generate-notes
