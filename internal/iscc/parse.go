@@ -135,6 +135,61 @@ func ParseTeamPath(page string) (string, bool) {
 	return "", false
 }
 
+// --- Arena JSON parsers ---
+
+type ArenaDetail struct {
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Category string `json:"category"`
+	Solves   int    `json:"solves"`
+	Value    int    `json:"value"`
+}
+
+func ParseArenaChallenges(data []byte) ([]Challenge, error) {
+	var response struct {
+		Game []struct {
+			Category string `json:"category"`
+			ID       int    `json:"id"`
+			Value    int    `json:"value"`
+		} `json:"game"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	challenges := make([]Challenge, 0, len(response.Game))
+	for _, ch := range response.Game {
+		challenges = append(challenges, Challenge{
+			ID:    ch.ID,
+			Track: TrackArena,
+		})
+	}
+	return challenges, nil
+}
+
+func ParseArenaSolvedIDs(data []byte) map[int]struct{} {
+	var response struct {
+		Solves []struct {
+			Chalid int `json:"chalid"`
+		} `json:"solves"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return map[int]struct{}{}
+	}
+	ids := map[int]struct{}{}
+	for _, solve := range response.Solves {
+		ids[solve.Chalid] = struct{}{}
+	}
+	return ids
+}
+
+func ParseArenaDetail(data []byte) (*ArenaDetail, error) {
+	var detail ArenaDetail
+	if err := json.Unmarshal(data, &detail); err != nil {
+		return nil, err
+	}
+	return &detail, nil
+}
+
 func ParseResult(statusCode int, body []byte) (string, any) {
 	text := strings.TrimSpace(string(body))
 	if regexp.MustCompile(`^-?\d+$`).MatchString(text) {

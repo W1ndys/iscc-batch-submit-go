@@ -8,6 +8,13 @@ const (
 	DefaultFlagsFile   = "flags.txt"
 )
 
+type Track string
+
+const (
+	TrackRegular Track = "regular"
+	TrackArena   Track = "arena"
+)
+
 var ResultMessages = map[string]string{
 	"1":  "✅ 正确",
 	"0":  "❌ 错误",
@@ -19,14 +26,17 @@ var ResultMessages = map[string]string{
 }
 
 type Challenge struct {
-	ID   int
-	Name string
+	ID     int
+	Name   string
+	Track  Track
+	Solves int
 }
 
 type Attempt struct {
 	ChallengeID int
 	Name        string
 	Flag        string
+	Track       Track
 }
 
 type SubmitResult struct {
