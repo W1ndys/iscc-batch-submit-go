@@ -167,7 +167,76 @@ func (c *Client) FetchChallenges() ([]Challenge, error) {
 			solvedIDs = ids
 		}
 	}
-	return ParseChallenges(string(body), solvedIDs)
+	challenges, err := ParseChallenges(string(body), solvedIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range challenges {
+		challenges[i].Track = TrackRegular
+	}
+	return challenges, nil
+}
+
+func (c *Client) FetchArenaChallenges() ([]Challenge, error) {
+	body, _, err := c.get("/arenas", map[string]string{
+		"Referer":          c.baseURL + "/arena",
+		"X-Requested-With": "XMLHttpRequest",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("获取擂台列表失败：%w", err)
+	}
+
+	challenges, err := ParseArenaChallenges(body)
+	if err != nil {
+		return nil, fmt.Errorf("解析擂台列表失败：%w", err)
+	}
+
+	solvedIDs, err := c.fetchArenaSolvedIDs()
+	if err != nil {
+		solvedIDs = map[int]struct{}{}
+	}
+
+	var unsolved []Challenge
+	for _, ch := range challenges {
+		if _, solved := solvedIDs[ch.ID]; solved {
+			continue
+		}
+		detail, err := c.fetchArenaDetail(ch.ID)
+		if err == nil {
+			ch.Name = detail.Name
+			ch.Solves = detail.Solves
+		}
+		unsolved = append(unsolved, ch)
+	}
+	return unsolved, nil
+}
+
+func (c *Client) GetArenaNonce() (string, error) {
+	body, _, err := c.get("/arena", map[string]string{
+		"Referer": c.baseURL + "/",
+	})
+	if err != nil {
+		return "", err
+	}
+	return ParseNonce(string(body))
+}
+
+func (c *Client) SubmitArenaFlag(challengeID int, flag, nonce string) (*http.Response, error) {
+	form := url.Values{}
+	form.Set("key", flag)
+	form.Set("nonce", nonce)
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/are/%d", c.baseURL, challengeID), bytes.NewBufferString(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("Origin", c.baseURL)
+	req.Header.Set("Referer", c.baseURL+"/arena")
+	return c.httpClient.Do(req)
 }
 
 func (c *Client) FetchSolvedIDsFromChallenges() (map[int]struct{}, error) {
@@ -200,6 +269,30 @@ func (c *Client) SubmitFlag(challengeID int, flag, nonce string) (*http.Response
 	req.Header.Set("Origin", c.baseURL)
 	req.Header.Set("Referer", c.baseURL+"/challenges")
 	return c.httpClient.Do(req)
+}
+
+func (c *Client) fetchArenaSolvedIDs() (map[int]struct{}, error) {
+	body, _, err := c.get("/arenasolves", map[string]string{
+		"Accept":           "application/json",
+		"Referer":          c.baseURL + "/arena",
+		"X-Requested-With": "XMLHttpRequest",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ParseArenaSolvedIDs(body), nil
+}
+
+func (c *Client) fetchArenaDetail(challengeID int) (*ArenaDetail, error) {
+	body, _, err := c.get(fmt.Sprintf("/arenas/%d", challengeID), map[string]string{
+		"Accept":           "application/json",
+		"Referer":          c.baseURL + "/arena",
+		"X-Requested-With": "XMLHttpRequest",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ParseArenaDetail(body)
 }
 
 func (c *Client) fetchSolvedIDs(teamPath string) (map[int]struct{}, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -41,19 +42,44 @@ func Run(ctx context.Context, cfg Config, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	challenges, err := client.FetchChallenges()
-	if err != nil {
-		return err
-	}
-	challenges = filterChallenges(challenges, cfg.Only, cfg.Exclude)
 
-	attempts := planAttempts(flags, challenges)
+	// Parallel fetch both tracks
+	var regularChallenges, arenaChallenges []iscc.Challenge
+	var wg sync.WaitGroup
+	var regularErr, arenaErr error
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		regularChallenges, regularErr = client.FetchChallenges()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		arenaChallenges, arenaErr = client.FetchArenaChallenges()
+	}()
+	wg.Wait()
+
+	if regularErr != nil {
+		return fmt.Errorf("获取练武题列表失败：%w", regularErr)
+	}
+	if arenaErr != nil {
+		fmt.Fprintf(out, "[!] 获取擂台题列表失败（跳过擂台）：%v\n", arenaErr)
+		arenaChallenges = nil
+	}
+
+	regularChallenges = filterChallenges(regularChallenges, cfg.Only, cfg.Exclude)
+	arenaChallenges = filterChallenges(arenaChallenges, cfg.Only, cfg.Exclude)
+
+	allChallenges := mergeChallengesByPriority(regularChallenges, arenaChallenges)
+
+	attempts := planAttempts(flags, allChallenges)
 	if len(attempts) == 0 {
 		fmt.Fprintln(out, "[!] 没有需要提交的 flag 或未解题目")
 		return nil
 	}
 
-	printPlan(out, flags, challenges, attempts, cfg)
+	printPlan(out, flags, allChallenges, attempts, cfg)
 	pending := attempts
 	roundNo := 0
 	cookieSnapshot := iscc.CookieJarToRecords(client.CookieJar(), cfg.BaseURL)
@@ -221,15 +247,25 @@ func submitOne(attempt iscc.Attempt, cfg Config, cookies []iscc.CookieRecord) is
 
 	nonce := strings.TrimSpace(cfg.Nonce)
 	if nonce == "" {
-		value, err := client.GetNonce()
+		var err error
+		if attempt.Track == iscc.TrackArena {
+			nonce, err = client.GetArenaNonce()
+		} else {
+			nonce, err = client.GetNonce()
+		}
 		if err != nil {
 			result.Error = fmt.Sprintf("%#v", err)
 			return result
 		}
-		nonce = value
 	}
 
-	resp, err := client.SubmitFlag(attempt.ChallengeID, attempt.Flag, nonce)
+	var resp *http.Response
+	var err error
+	if attempt.Track == iscc.TrackArena {
+		resp, err = client.SubmitArenaFlag(attempt.ChallengeID, attempt.Flag, nonce)
+	} else {
+		resp, err = client.SubmitFlag(attempt.ChallengeID, attempt.Flag, nonce)
+	}
 	if err != nil {
 		result.Error = fmt.Sprintf("%#v", err)
 		return result
@@ -280,6 +316,7 @@ func planAttempts(flags []string, challenges []iscc.Challenge) []iscc.Attempt {
 				ChallengeID: challenge.ID,
 				Name:        challenge.Name,
 				Flag:        flag,
+				Track:       challenge.Track,
 			})
 		}
 	}
@@ -304,10 +341,40 @@ func filterChallenges(challenges []iscc.Challenge, only, exclude []int) []iscc.C
 	return out
 }
 
+func mergeChallengesByPriority(regular, arena []iscc.Challenge) []iscc.Challenge {
+	all := make([]iscc.Challenge, 0, len(regular)+len(arena))
+	all = append(all, arena...)
+	all = append(all, regular...)
+
+	sort.SliceStable(all, func(i, j int) bool {
+		// Arena challenges with most solves first
+		if all[i].Track == iscc.TrackArena && all[j].Track == iscc.TrackArena {
+			return all[i].Solves > all[j].Solves
+		}
+		// Arena before regular
+		if all[i].Track == iscc.TrackArena && all[j].Track != iscc.TrackArena {
+			return true
+		}
+		if all[i].Track != iscc.TrackArena && all[j].Track == iscc.TrackArena {
+			return false
+		}
+		return all[i].ID < all[j].ID
+	})
+	return all
+}
+
 func printPlan(out io.Writer, flags []string, challenges []iscc.Challenge, attempts []iscc.Attempt, cfg Config) {
 	fmt.Fprintln(out, "[*] 当前未解题目：")
 	for _, challenge := range challenges {
-		fmt.Fprintf(out, "    - %d | %s\n", challenge.ID, challenge.Name)
+		if challenge.Track == iscc.TrackArena {
+			if challenge.Solves > 0 {
+				fmt.Fprintf(out, "    - %d | %s [擂台] (已解%d人)\n", challenge.ID, challenge.Name, challenge.Solves)
+			} else {
+				fmt.Fprintf(out, "    - %d | %s [擂台]\n", challenge.ID, challenge.Name)
+			}
+		} else {
+			fmt.Fprintf(out, "    - %d | %s [练武]\n", challenge.ID, challenge.Name)
+		}
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "[*] Flag 数量：%d\n", len(flags))
